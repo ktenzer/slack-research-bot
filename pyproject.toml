@@ -1,7 +1,7 @@
 [project]
-name = "temporal-daf-poc"
+name = "slack-research-bot"
 version = "0.1.0"
-description = "Temporal Durable Agent Framework POC"
+description = "Slack Research Bot"
 readme = "README.md"
 requires-python = ">=3.13,<4.0"
 dependencies = [
@@ -15,4 +15,5 @@ dependencies = [
     "langgraph (>=0.4.8,<0.5.0)",
     "openai (>=1.84.0,<2.0.0)",
     "langchain-community (>=0.3.24,<0.4.0)",
+    "langchain-openai (>=0.3.21,<0.4.0)",
 ]

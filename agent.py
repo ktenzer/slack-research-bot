@@ -10,7 +10,7 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 relative_path = os.path.join(os.path.dirname(__file__), '../../')
 sys.path.append(relative_path)
 
-from tools import get_slack_channels, search_slack, get_thread_messages
+from tools import get_slack_channels, search_slack, get_thread_messages, PromptUser
 from sys_prompt import get_system_prompt
 from libs.agent import Agent
 
@@ -35,9 +35,9 @@ async def main():
 
     # Initialise the LLM-powered agent
     async with Agent(
-        model_name="models/gemini-2.5-pro-preview-05-06",
+        model_name="gpt-4o-mini",
         instruction=get_system_prompt(),
-        functions=[get_slack_channels, search_slack, get_thread_messages],
+        functions=[get_slack_channels, search_slack, get_thread_messages, PromptUser],
     ) as agent:
         slack_app = AsyncApp(token=bot_token)  
 
@@ -65,22 +65,32 @@ async def main():
                 thoughts_task.cancel()
 
         # Handle direct messages
-        @slack_app.event("message")           
+        chat_state = {"watermark": 0}  
+        @slack_app.event("message")
         async def handle_dm(event, say):
-            if event.get("channel_type") != "im":      
+            # -- ignore anything that isn't a direct user DM -------------
+            if event.get("channel_type") != "im":
                 return
             if event.get("subtype") or event.get("bot_id"):
-                return                             
+                return
 
             text = (event.get("text") or "").strip()
             if not text:
                 return
 
+            # Show “thinking…” indicator
             await say("🤔 Thinking…")
+
+            # Fire off the background poller
             poll = asyncio.create_task(_poll_thoughts_to_slack(agent, say))
             try:
+                # 1️⃣  Normal assistant response
                 reply = await agent.prompt(text)
                 await say(f"🤖 {reply}")
+
+                # 2️⃣  Advance watermark so we don’t re-show the same text
+                chat_state["watermark"] += 1
+
             finally:
                 poll.cancel()
 

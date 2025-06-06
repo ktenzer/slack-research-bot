@@ -49,6 +49,26 @@ class ThreadInput:
     """
     thread_url: str
 
+class PromptUserRequest:
+    """
+    LLM may send either {"prompt": "..."} or {"q": "..."}.
+    We accept both and expose a unified `.text` property.
+    """
+    prompt: Optional[str] = None
+    q: Optional[str] = None
+
+    @property
+    def text(self) -> str:
+        return self.prompt or self.q or ""
+
+def PromptUser(args: PromptUserRequest) -> str:
+    """
+    Tell the outer application to ask the user something, then
+    return an acknowledgement so the LLM can resume after the
+    next user message.
+    """
+    return f"Awaiting user response: {args.text}"
+
 def get_slack_channels(request: GetChannelsRequest) -> List[Dict[str, Any]]:
     """Get a list of Slack channels from the workspace.
 
@@ -73,8 +93,8 @@ def get_slack_channels(request: GetChannelsRequest) -> List[Dict[str, Any]]:
     try:
         # Determine channel types to include
         channel_types = ["public_channel"]
-        if request.include_private:
-            channel_types.append("private_channel")
+        #if request.include_private:
+        #    channel_types.append("private_channel")
 
         # Make the API request
         response = client.conversations_list(
@@ -90,7 +110,7 @@ def get_slack_channels(request: GetChannelsRequest) -> List[Dict[str, Any]]:
         for channel in channels:
             logger.debug(f"Channel: #{channel.get('name')} (ID: {channel.get('id')}, "
                         f"Members: {channel.get('num_members', 'N/A')}, "
-                        f"Private: {channel.get('is_private', False)}, "
+            #            f"Private: {channel.get('is_private', False)}, "
                         f"Archived: {channel.get('is_archived', False)})")
 
         # Return simplified channel data

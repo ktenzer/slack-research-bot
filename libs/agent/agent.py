@@ -1,75 +1,73 @@
 import asyncio
+import json
 import logging
 import os
 import uuid
 from typing import Callable, Dict, List, Optional
 
-import vertexai
-from vertexai.generative_models import (
-    Content,
-    GenerativeModel,
-    Part,
-)
+from langchain_openai import ChatOpenAI           # requires langchain-openai ≥0.1.6
+from langchain.schema.messages import AIMessage
 
-from ..agent.tool import create_enhanced_tool                     # ← unchanged
-from .workflow import GraphState, build_conversation_graph  # ← new LangGraph workflow
+from ..agent.tool import create_enhanced_tool
+from .workflow import build_conversation_graph
 
 
 class Agent:
     """
-    Same public surface as before (async context-manager, prompt(), thoughts()) but
-    executed entirely in-process with LangChain/LangGraph.
+    Same public interface (async-context manager, prompt(), thoughts()) but
+    powered by ChatOpenAI against ANY OpenAI-compatible backend (Ollama, Groq…).
     """
 
     def __init__(
         self,
         *,
-        gcp_project: Optional[str] = None,
-        region: str = "us-central1",
-        model_name: str = "gemini-2.0-flash",
+        model_name: str = "llama3.2",
         instruction: str = (
-            "You are a store-support API assistant to help with online orders."
+            "You are a store-support API assistant that helps with online orders."
         ),
         functions: List[Callable] | None = None,
+        openai_api_base: Optional[str] = None,
+        openai_api_key: Optional[str] = None,
     ) -> None:
-        self.gcp_project = gcp_project or os.getenv("GCP_PROJECT_ID")
-        self.region = region
         self.model_name = model_name
-        self.instruction = instruction
+        self.instruction = instruction.strip()
         self.functions: List[Callable] = functions or []
 
-        # Vertex initialisation
-        vertexai.init(project=self.gcp_project, location=self.region)
-        self._model = GenerativeModel(
-            self.model_name,
-            system_instruction=[self.instruction],
+        # ChatOpenAI instance (streaming off, temperature fixed to 0)
+     
+        self._model = ChatOpenAI(
+            model=model_name,
+            temperature=0,
+            #base_url=openai_api_base or os.getenv("OPENAI_API_BASE"),
+            #base_url='http://localhost:11434/v1',
+            #openai_api_key ="ollama",
+            openai_api_key=openai_api_key or os.getenv("OPENAI_API_KEY"),
         )
 
-        # Build Vertex-compatible tool schema once
-        self._vertex_tool = create_enhanced_tool(self.functions)
+        # One-time JSON schemas for function-calling
+        self._functions_schema = create_enhanced_tool(self.functions)
 
-        # Map function name ➜ python callable for the tool node
+        # Map tool name → python callable
         self._tool_map: Dict[str, Callable] = {fn.__name__: fn for fn in self.functions}
 
-        # Persistent conversation state
-        self._contents: List[Content] = []
+        # Running chat history (OpenAI message dicts)
+        self._messages: List[Dict] = [
+            {"role": "system", "content": self.instruction}
+        ]
 
-        # LangGraph executor (compiled graph)
+        # Compile graph
         self._graph = build_conversation_graph(
             model=self._model,
-            vertex_tool=self._vertex_tool,
+            functions_schema=self._functions_schema,
             tool_map=self._tool_map,
         )
 
         self._terminated = False
         logging.basicConfig(level=logging.INFO)
 
-    # --------------------------------------------------------------------- #
-    #  Async context-manager helpers
-    # --------------------------------------------------------------------- #
+    # context-manager 
     async def __aenter__(self) -> "Agent":
-        # Kick off an empty workflow instance (mirrors Temporal start_workflow)
-        self._workflow_id = str(uuid.uuid4())
+        self._session_id = str(uuid.uuid4())
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -78,9 +76,7 @@ class Agent:
         finally:
             self._terminated = True
 
-    # --------------------------------------------------------------------- #
-    #  Public API: prompt / thoughts
-    # --------------------------------------------------------------------- #
+    # public API
     async def prompt(self, prompt: str) -> str:
         if self._terminated:
             raise RuntimeError("Agent has been terminated.")
@@ -89,34 +85,21 @@ class Agent:
             self._terminated = True
             return ""
 
-        # 1) push user message into history
-        self._contents.append(Content(role="user", parts=[Part.from_text(prompt)]))
+        self._messages.append({"role": "user", "content": prompt})
+        state_out = self._graph.invoke({"messages": self._messages, "tool_calls": []})
+        self._messages = state_out["messages"]
 
-        # 2) build the incoming state **as a plain dict**
-        state_in = {"contents": list(self._contents), "tool_calls": []}
-
-        # 3) run the graph – result is an AddableValuesDict
-        state_out = self._graph.invoke(state_in)
-
-        # 4) pull the updated history back out
-        self._contents = state_out["contents"]
-
-        # 5) return the last model text
-        for content in reversed(self._contents):
-            if content.role == "model":
-                for part in content.parts:
-                    text = getattr(part, "text", None)
-                    if text:
-                        return text
+        for msg in reversed(self._messages):
+            if msg["role"] == "assistant" and isinstance(msg["content"], str):
+                return msg["content"]
         return ""
 
-async def thoughts(self, watermark: int) -> List[str]:
-    texts, idx = [], 0
-    for content in self._contents:
-        if content.role == "model":
-            for part in content.parts:
-                if getattr(part, "text", None):
-                    if idx > watermark:          #  ✅ strict “greater than”
-                        texts.append(part.text)
-                    idx += 1
-    return texts
+    async def thoughts(self, watermark: int) -> List[str]:
+        """Return assistant messages *after* the given watermark index."""
+        texts, idx = [], 0
+        for msg in self._messages:
+            if msg["role"] == "assistant" and isinstance(msg["content"], str):
+                if idx > watermark:
+                    texts.append(msg["content"])
+                idx += 1
+        return texts
