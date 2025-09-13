@@ -49,25 +49,36 @@ class ThreadInput:
     """
     thread_url: str
 
+@dataclass
 class PromptUserRequest:
     """
-    LLM may send either {"prompt": "..."} or {"q": "..."}.
-    We accept both and expose a unified `.text` property.
+    LLM may send either {"prompt": "..."}, {"q": "..."}, or {"text": "..."}.
+    We accept all three and expose a unified `.text` property.
     """
     prompt: Optional[str] = None
     q: Optional[str] = None
+    text: Optional[str] = None
 
     @property
-    def text(self) -> str:
-        return self.prompt or self.q or ""
+    def resolved_text(self) -> str:
+        """Return whichever field was supplied."""
+        return self.prompt or self.q or self.text or ""
 
-def PromptUser(args: PromptUserRequest) -> str:
+
+def PromptUser(args: PromptUserRequest | Dict[str, Any]) -> str:
     """
     Tell the outer application to ask the user something, then
     return an acknowledgement so the LLM can resume after the
     next user message.
+
+    The LangGraph runtime passes tool arguments as dictionaries, so we
+    gracefully handle both dataclass instances and raw dicts.
     """
-    return f"Awaiting user response: {args.text}"
+    if isinstance(args, dict):
+        text = args.get("prompt") or args.get("q") or args.get("text") or ""
+    else:
+        text = args.resolved_text
+    return f"Awaiting user response: {text}"
 
 def get_slack_channels(request: GetChannelsRequest) -> List[Dict[str, Any]]:
     """Get a list of Slack channels from the workspace.

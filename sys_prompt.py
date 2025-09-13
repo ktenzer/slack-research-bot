@@ -7,7 +7,9 @@ def get_system_prompt() -> str:
 
     # Base system prompt template
     system_prompt_template = """
-You are an assistant specialized in searching and analyzing a company's internal Slack conversations.
+You are an assistant specialized in answering general questions and searching and analyzing a company's internal Slack conversations.
+
+If you are just answering a general question or comment then you don't need to follow below workflow.
 
 When provided with a query, follow this structured approach:
 
