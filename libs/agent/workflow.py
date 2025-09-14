@@ -4,6 +4,7 @@ import inspect
 import json
 import random
 import time
+import logging
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Union
 
@@ -11,6 +12,8 @@ import openai
 from langchain_openai import ChatOpenAI
 from langchain.schema.messages import AIMessage
 from langgraph.graph import StateGraph
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class GraphState:
@@ -89,9 +92,13 @@ def build_conversation_graph(
 
         for idx, call in enumerate(state["tool_calls"]):
             tool_call_id, fn_name, fn_args = _parse_call(call, idx)
+            logger.info(
+                "Executing tool",
+                extra={"tool": fn_name, "tool_args": fn_args},
+            )
 
             if fn_name not in tool_map:
-                print(f"[tool_node] unknown tool {fn_name}, skipping")
+                logger.warning("Unknown tool requested", extra={"tool": fn_name})
                 continue
 
             py_fn = tool_map[fn_name]
@@ -101,25 +108,30 @@ def build_conversation_graph(
             param_name = first_param.name
             param_type = first_param.annotation
 
-            if inspect.isclass(param_type) and hasattr(param_type, "__dataclass_fields__"):
-                # If LLM wrapped args like {"request": {...}}, unwrap first
-                if len(fn_args) == 1 and param_name in fn_args:
-                    fn_args = fn_args[param_name]
-                out = py_fn(param_type(**fn_args))
-            else:
-                out = py_fn(fn_args)
+            try:
+                if inspect.isclass(param_type) and hasattr(param_type, "__dataclass_fields__"):
+                    # If LLM wrapped args like {"request": {...}}, unwrap first
+                    if len(fn_args) == 1 and param_name in fn_args:
+                        fn_args = fn_args[param_name]
+                    out = py_fn(param_type(**fn_args))
+                else:
+                    out = py_fn(fn_args)
+                content = json.dumps({"content": out})
+            except Exception as err:
+                logger.exception("Tool execution failed", extra={"tool": fn_name})
+                content = json.dumps({"error": str(err)})
 
             results.append(
                 {
                     "role": "tool",
-                    "tool_call_id": tool_call_id,     
-                    "name": fn_name,                     
-                    "content": json.dumps({"content": out}),
+                    "tool_call_id": tool_call_id,
+                    "name": fn_name,
+                    "content": content,
                 }
             )
 
         msgs.extend(results)
-        state["tool_calls"] = []          
+        state["tool_calls"] = []
         return state
 
     # Graph nodes

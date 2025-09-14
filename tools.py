@@ -197,14 +197,21 @@ def search_slack(request: SlackSearchRequest) -> SlackSearchResult | str:
         SlackApiError: If the Slack API request fails
     """
     # Get API token
-    slack_user_token = os.getenv("SLACK_USER_TOKEN")
+    slack_user_token = request.token or os.getenv("SLACK_USER_TOKEN")
     if not slack_user_token:
-        return error_msg
+        return "SLACK_USER_TOKEN environment variable is required"
 
     # Validate that it's a user token
     if not slack_user_token.startswith("xoxp-"):
-        error_msg = f"Invalid token type. Search API requires a User Token starting with 'xoxp-', got token starting with '{slack_user_token[:5]}'"
+        error_msg = (
+            "Invalid token type. Search API requires a User Token starting with "
+            f"'xoxp-', got token starting with '{slack_user_token[:5]}'"
+        )
         return error_msg
+
+    logger.debug(
+        "Starting Slack search", extra={"query": request.query, "channels": request.channels}
+    )
 
     # Validate parameters
     if not request.query or not request.query.strip():
