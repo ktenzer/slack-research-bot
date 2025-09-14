@@ -10,6 +10,45 @@ from slack_sdk.errors import SlackApiError
 # Set up logging
 logger = logging.getLogger(__name__)
 
+# Simple in-memory cache for Slack user lookups
+_user_cache: Dict[str, str] = {}
+
+
+def _get_user_name(client: WebClient, user_id: str, team_id: str | None = None) -> str:
+    """Resolve a Slack user ID to a human-readable name.
+
+    Looks up the user via the Slack API and prefers the display name,
+    falling back to the real name or the raw ID if necessary. For Slack
+    Connect users, the team_id can be supplied to look up remote profiles.
+    Results are cached locally for the lifetime of the process to minimize
+    API calls.
+    """
+    if not user_id:
+        return "Unknown"
+
+    cache_key = f"{team_id}:{user_id}" if team_id else user_id
+    if cache_key in _user_cache:
+        return _user_cache[cache_key]
+    try:
+        info = (
+            client.users_info(user=user_id, team=team_id)
+            if team_id
+            else client.users_info(user=user_id)
+        )
+        user = info.get("user", {})
+        profile = user.get("profile", {})
+        name = (
+            profile.get("display_name")
+            or profile.get("real_name")
+            or user.get("name")
+            or user_id
+        )
+        _user_cache[cache_key] = name
+        return name
+    except SlackApiError:
+        _user_cache[cache_key] = user_id
+        return user_id
+
 @dataclass
 class GetChannelsRequest:
     """Request parameters for getting Slack channels"""
@@ -233,6 +272,40 @@ def search_slack(request: SlackSearchRequest) -> SlackSearchResult | str:
         pagination = messages.get("pagination", {})
         has_more = pagination.get("total_count", 0) > len(matches)
 
+        # Resolve user IDs to display names, handling Slack Connect users
+        user_ids = set()
+        for m in matches:
+            tid = m.get("team") or m.get("user_team")
+            uid = m.get("user")
+            if uid:
+                user_ids.add((uid, tid))
+            for ru in m.get("reply_users", []) or []:
+                user_ids.add((ru, tid))
+            for reaction in m.get("reactions", []) or []:
+                for ru in reaction.get("users", []) or []:
+                    user_ids.add((ru, tid))
+
+        user_map = {
+            (uid, tid): _get_user_name(client, uid, tid)
+            for uid, tid in user_ids
+        }
+
+        for m in matches:
+            tid = m.get("team") or m.get("user_team")
+            uid = m.get("user")
+            if uid:
+                resolved = user_map.get((uid, tid), uid)
+                m["user"] = resolved
+                m["username"] = resolved
+            if m.get("reply_users"):
+                m["reply_users"] = [
+                    user_map.get((ru, tid), ru) for ru in m.get("reply_users", [])
+                ]
+            for reaction in m.get("reactions", []) or []:
+                reaction["users"] = [
+                    user_map.get((ru, tid), ru) for ru in reaction.get("users", [])
+                ]
+
         logger.debug(f"Search completed - found {total} total results, returning {len(matches)} matches")
         logger.debug(f"Results preview: {[match.get('text', '')[:50] + '...' for match in matches[:3]]}")
 
@@ -364,15 +437,38 @@ def get_thread_messages(params: ThreadInput) -> List[Dict[str, Any]]:
         # Log thread information
         logger.debug(f"Retrieved {len(messages)} messages from thread")
 
+        # Resolve user IDs to names, including participants in replies and reactions
+        user_ids = set()
+        for m in messages:
+            tid = m.get("team") or m.get("user_team")
+            uid = m.get("user")
+            if uid:
+                user_ids.add((uid, tid))
+            for ru in m.get("reply_users", []) or []:
+                user_ids.add((ru, tid))
+            for reaction in m.get("reactions", []) or []:
+                for ru in reaction.get("users", []) or []:
+                    user_ids.add((ru, tid))
+
+        user_map = {
+            (uid, tid): _get_user_name(client, uid, tid)
+            for uid, tid in user_ids
+        }
+
         # Return simplified message data
         thread_messages = []
         for msg in messages:
+            tid = msg.get("team") or msg.get("user_team")
+            uid = msg.get("user")
             thread_messages.append({
                 "text": msg.get("text"),
-                "user": msg.get("user"),
+                "user": user_map.get((uid, tid), uid),
                 "timestamp": msg.get("ts"),
                 "reply_count": msg.get("reply_count", 0),
                 "reply_users_count": msg.get("reply_users_count", 0),
+                "reply_users": [
+                    user_map.get((ru, tid), ru) for ru in msg.get("reply_users", []) or []
+                ],
             })
 
         logger.debug(f"Returning {len(thread_messages)} formatted messages")
