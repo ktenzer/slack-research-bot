@@ -330,25 +330,40 @@ def get_thread_messages(params: ThreadInput) -> List[Dict[str, Any]]:
 
     try:
         # Extract channel ID and thread timestamp from URL
-        # URLs are in format: https://xxx.slack.com/archives/CHANNEL_ID/p1234567890123456
-        url_parts = thread_url.split('/')
-        if len(url_parts) < 6:
+        # Example formats:
+        #   https://xxx.slack.com/archives/CHANNEL_ID/p1234567890123456
+        #   https://xxx.slack.com/archives/CHANNEL_ID/p1234567890123456?thread_ts=1234567890.123456&cid=CHANNEL_ID
+        from urllib.parse import urlparse, parse_qs
+
+        parsed = urlparse(thread_url)
+        path_parts = parsed.path.strip("/").split("/")
+        if len(path_parts) < 3:
             raise ValueError("Invalid Slack thread URL format")
-            
-        channel_id = url_parts[-2]
-        thread_ts = url_parts[-1][1:10] + '.' + url_parts[-1][10:]
+
+        channel_id = path_parts[-2]
+        message_part = path_parts[-1]
+
+        if not message_part.startswith("p"):
+            raise ValueError("Invalid Slack thread URL format")
+
+        raw_ts = message_part[1:]
+        base_ts = raw_ts[:10] + "." + raw_ts[10:]
+
+        # If the URL includes a thread_ts query param, use that as the parent timestamp
+        query_ts = parse_qs(parsed.query).get("thread_ts", [base_ts])[0]
+        thread_ts = query_ts
 
         # Get thread messages
         response = client.conversations_replies(
             channel=channel_id,
-            ts=thread_ts
+            ts=thread_ts,
         )
 
         messages = response.get("messages", [])
-        
+
         # Log thread information
         logger.debug(f"Retrieved {len(messages)} messages from thread")
-        
+
         # Return simplified message data
         thread_messages = []
         for msg in messages:
@@ -357,14 +372,18 @@ def get_thread_messages(params: ThreadInput) -> List[Dict[str, Any]]:
                 "user": msg.get("user"),
                 "timestamp": msg.get("ts"),
                 "reply_count": msg.get("reply_count", 0),
-                "reply_users_count": msg.get("reply_users_count", 0)
+                "reply_users_count": msg.get("reply_users_count", 0),
             })
 
         logger.debug(f"Returning {len(thread_messages)} formatted messages")
         return thread_messages
 
     except SlackApiError as e:
-        logger.error(f"Slack API error: {e.response['error']}")
+        # Gracefully handle cases where the thread cannot be found
+        error = e.response.get("error")
+        logger.error(f"Slack API error: {error}")
+        if error == "thread_not_found":
+            return []
         raise
     except Exception as e:
         logger.error(f"Unexpected error retrieving thread messages: {str(e)}")

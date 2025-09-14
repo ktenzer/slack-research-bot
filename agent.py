@@ -22,7 +22,8 @@ async def _poll_thoughts_to_slack(agent, say, watermark=0):
             thoughts = await agent.thoughts(watermark=watermark)
             if thoughts:
                 for line in thoughts:
-                    await say(f"🧠 {line}")
+                    if line and line.strip():
+                        await say(f"🧠 {line.strip()}")
                 watermark += len(thoughts)
             await asyncio.sleep(2)
     except asyncio.CancelledError:
