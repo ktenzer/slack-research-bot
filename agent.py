@@ -17,7 +17,7 @@ from tools import (
     send_slack_message,
 )
 from sys_prompt import get_system_prompt
-from libs.agent import Agent
+from libs.agent.agent import Agent
 
 async def main():
     # Slack credentials

@@ -8,7 +8,7 @@ from typing import Callable, Dict, List, Optional
 from langchain_openai import ChatOpenAI           # requires langchain-openai ≥0.1.6
 from langchain.schema.messages import AIMessage
 
-from ..agent.tool import create_enhanced_tool
+from .tool import create_enhanced_tool
 from .workflow import build_conversation_graph
 
 
