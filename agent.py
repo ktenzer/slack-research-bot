@@ -52,9 +52,14 @@ async def main():
                 await say("Please include a question after mentioning me.")
                 return
 
-            await say("🧠 Thinking…")
+            thread_ts = body["event"].get("thread_ts", body["event"]["ts"])
+            thinking_message = await say("🧠 Thinking…", thread_ts=thread_ts)
             response = await agent.prompt(user_text)
-            await say(response)
+            await slack_app.client.chat_update(
+                channel=body["event"]["channel"],
+                ts=thinking_message["ts"],
+                text=response,
+            )
 
         # Handle direct messages
         @slack_app.event("message")
