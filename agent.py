@@ -9,7 +9,13 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 relative_path = os.path.join(os.path.dirname(__file__), '../../')
 sys.path.append(relative_path)
 
-from tools import get_slack_channels, search_slack, get_thread_messages, PromptUser
+from tools import (
+    get_slack_channels,
+    search_slack,
+    get_thread_messages,
+    PromptUser,
+    send_slack_message,
+)
 from sys_prompt import get_system_prompt
 from libs.agent import Agent
 
@@ -22,7 +28,13 @@ async def main():
     async with Agent(
         model_name="gpt-4o-mini",
         instruction=get_system_prompt(),
-        functions=[get_slack_channels, search_slack, get_thread_messages, PromptUser],
+        functions=[
+            get_slack_channels,
+            search_slack,
+            get_thread_messages,
+            PromptUser,
+            send_slack_message,
+        ],
     ) as agent:
         slack_app = AsyncApp(token=bot_token)  
 
@@ -34,8 +46,8 @@ async def main():
             send it to the agent, and post the reply back to Slack.
             """
             raw_text = body["event"]["text"]
-            # Remove the bot mention (e.g. "<@U123ABC> hello" → "hello")
-            user_text = re.sub(r"<@[^>]+>", "", raw_text).strip()
+            # Remove only the leading bot mention (e.g. "<@U123ABC> hello" → "hello")
+            user_text = re.sub(r"^<@[^>]+>\s*", "", raw_text).strip()
             if not user_text:
                 await say("Please include a question after mentioning me.")
                 return

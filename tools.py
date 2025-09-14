@@ -107,6 +107,14 @@ class PromptUserRequest:
         return self.prompt or self.q or self.text or ""
 
 
+@dataclass
+class SendMessageRequest:
+    """Parameters for sending a Slack message."""
+    text: str
+    user: Optional[str] = None
+    channel: Optional[str] = None
+
+
 def PromptUser(args: PromptUserRequest | Dict[str, Any]) -> str:
     """
     Tell the outer application to ask the user something, then
@@ -121,6 +129,43 @@ def PromptUser(args: PromptUserRequest | Dict[str, Any]) -> str:
     else:
         text = args.resolved_text
     return f"Awaiting user response: {text}"
+
+
+def send_slack_message(request: SendMessageRequest) -> str:
+    """Send a direct message or post to a channel using the bot token.
+
+    Provide either a Slack user ID in ``user`` to send a DM or a channel ID in
+    ``channel``. Exactly one of these must be supplied. Returns a confirmation
+    string on success or an error message on failure.
+    """
+    text = request.text
+    user = request.user
+    channel = request.channel
+
+    slack_token = os.getenv("SLACK_BOT_TOKEN")
+    if not slack_token:
+        raise ValueError("SLACK_BOT_TOKEN environment variable is required")
+
+    client = WebClient(token=slack_token)
+
+    try:
+        if user:
+            conv = client.conversations_open(users=user)
+            channel_id = conv.get("channel", {}).get("id")
+        elif channel:
+            channel_id = channel
+        else:
+            raise ValueError("Either 'user' or 'channel' must be provided")
+
+        client.chat_postMessage(channel=channel_id, text=text)
+        target = f"user {user}" if user else f"channel {channel}"
+        return f"Message sent to {target}"
+    except SlackApiError as e:
+        logger.error(f"Slack API error: {e.response['error']}")
+        return f"Slack API error: {e.response['error']}"
+    except Exception as e:
+        logger.error(f"Unexpected error sending message: {str(e)}")
+        return f"Error sending message: {str(e)}"
 
 def get_slack_channels(request: GetChannelsRequest) -> List[Dict[str, Any]]:
     """Get a list of Slack channels from the workspace.
