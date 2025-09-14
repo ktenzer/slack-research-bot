@@ -1,5 +1,6 @@
 import os
 import logging
+import re
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -9,6 +10,8 @@ from slack_sdk.errors import SlackApiError
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
 
 # Simple in-memory cache for Slack user lookups
 _user_cache: Dict[str, str] = {}
@@ -284,6 +287,8 @@ def search_slack(request: SlackSearchRequest) -> SlackSearchResult | str:
             for reaction in m.get("reactions", []) or []:
                 for ru in reaction.get("users", []) or []:
                     user_ids.add((ru, tid))
+            for uid in MENTION_RE.findall(m.get("text") or ""):
+                user_ids.add((uid, tid))
 
         user_map = {
             (uid, tid): _get_user_name(client, uid, tid)
@@ -305,6 +310,12 @@ def search_slack(request: SlackSearchRequest) -> SlackSearchResult | str:
                 reaction["users"] = [
                     user_map.get((ru, tid), ru) for ru in reaction.get("users", [])
                 ]
+
+            def _replace(match):
+                uid = match.group(1)
+                return "@" + user_map.get((uid, tid), uid)
+
+            m["text"] = MENTION_RE.sub(_replace, m.get("text") or "")
 
         logger.debug(f"Search completed - found {total} total results, returning {len(matches)} matches")
         logger.debug(f"Results preview: {[match.get('text', '')[:50] + '...' for match in matches[:3]]}")
@@ -437,7 +448,7 @@ def get_thread_messages(params: ThreadInput) -> List[Dict[str, Any]]:
         # Log thread information
         logger.debug(f"Retrieved {len(messages)} messages from thread")
 
-        # Resolve user IDs to names, including participants in replies and reactions
+        # Resolve user IDs to names, including participants in replies, reactions, and mentions
         user_ids = set()
         for m in messages:
             tid = m.get("team") or m.get("user_team")
@@ -449,6 +460,8 @@ def get_thread_messages(params: ThreadInput) -> List[Dict[str, Any]]:
             for reaction in m.get("reactions", []) or []:
                 for ru in reaction.get("users", []) or []:
                     user_ids.add((ru, tid))
+            for uid in MENTION_RE.findall(m.get("text") or ""):
+                user_ids.add((uid, tid))
 
         user_map = {
             (uid, tid): _get_user_name(client, uid, tid)
@@ -460,8 +473,15 @@ def get_thread_messages(params: ThreadInput) -> List[Dict[str, Any]]:
         for msg in messages:
             tid = msg.get("team") or msg.get("user_team")
             uid = msg.get("user")
+
+            def _replace(match):
+                uid = match.group(1)
+                return "@" + user_map.get((uid, tid), uid)
+
+            text = MENTION_RE.sub(_replace, msg.get("text") or "")
+
             thread_messages.append({
-                "text": msg.get("text"),
+                "text": text,
                 "user": user_map.get((uid, tid), uid),
                 "timestamp": msg.get("ts"),
                 "reply_count": msg.get("reply_count", 0),

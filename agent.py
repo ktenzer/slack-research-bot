@@ -2,7 +2,6 @@ import sys
 import os
 import re
 import asyncio
-import aioconsole
 
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
@@ -13,21 +12,6 @@ sys.path.append(relative_path)
 from tools import get_slack_channels, search_slack, get_thread_messages, PromptUser
 from sys_prompt import get_system_prompt
 from libs.agent import Agent
-
-
-# Stream agent thoughts back to slack
-async def _poll_thoughts_to_slack(agent, say, watermark=0):
-    try:
-        while True:
-            thoughts = await agent.thoughts(watermark=watermark)
-            if thoughts:
-                for line in thoughts:
-                    if line and line.strip():
-                        await say(f"🧠 {line.strip()}")
-                watermark += len(thoughts)
-            await asyncio.sleep(2)
-    except asyncio.CancelledError:
-        pass
 
 async def main():
     # Slack credentials
@@ -53,20 +37,14 @@ async def main():
             # Remove the bot mention (e.g. "<@U123ABC> hello" → "hello")
             user_text = re.sub(r"<@[^>]+>", "", raw_text).strip()
             if not user_text:
-                await say("🤖 Please include a question after mentioning me.")
+                await say("Please include a question after mentioning me.")
                 return
 
-            await say("🤔 Thinking…")
-            thoughts_task = asyncio.create_task(_poll_thoughts_to_slack(agent, say))
-
-            try:
-                response = await agent.prompt(user_text)
-                await say(f"🤖 {response}")
-            finally:
-                thoughts_task.cancel()
+            await say("🧠 Thinking…")
+            response = await agent.prompt(user_text)
+            await say(response)
 
         # Handle direct messages
-        chat_state = {"watermark": 0}  
         @slack_app.event("message")
         async def handle_dm(event, say):
             # -- ignore anything that isn't a direct user DM -------------
@@ -80,20 +58,11 @@ async def main():
                 return
 
             # Show “thinking…” indicator
-            await say("🤔 Thinking…")
+            await say("🧠 Thinking…")
 
-            # Fire off the background poller
-            poll = asyncio.create_task(_poll_thoughts_to_slack(agent, say))
-            try:
-                # 1️⃣  Normal assistant response
-                reply = await agent.prompt(text)
-                await say(f"🤖 {reply}")
-
-                # 2️⃣  Advance watermark so we don’t re-show the same text
-                chat_state["watermark"] += 1
-
-            finally:
-                poll.cancel()
+            # 1️⃣  Normal assistant response
+            reply = await agent.prompt(text)
+            await say(reply)
 
         # Websocket listener
         handler = AsyncSocketModeHandler(slack_app, app_token)
